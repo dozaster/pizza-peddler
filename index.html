@@ -1,457 +1,427 @@
 <!DOCTYPE html>
 <html lang="en">
 <head>
-  <meta charset="UTF-8" />
-  <meta name="viewport" content="width=device-width, initial-scale=1.0"/>
-  <title>Pizza Peddler — Pilsen Run</title>
-  <style>
-    :root{
-      --sky: #86c5e6;
-      --sky2:#9fd6f2;
-      --road:#3f3f46;
-      --sidewalk:#6e6e78;
-      --grass:#66b76a;
-      --lane:#5a5a63;
-      --white:#fff;
-    }
-    *{ box-sizing:border-box }
-    html,body{
-      height:100%; margin:0;
-      background:#1f2026; color:var(--white);
-      font-family: system-ui, -apple-system, Segoe UI, Roboto, Helvetica, Arial, sans-serif;
-      overflow:hidden;
-    }
-    .wrap{ position:relative; width:100vw; height:100vh; display:grid; place-items:center; }
-    canvas{
-      border:2px solid #fff;
-      background: var(--sky);
-      width:min(100vw,1100px);
-      height:min(78vh,800px);
-      max-height:calc(100vh - 40px);
-      image-rendering: pixelated;
-    }
-    .hud{
-      position:absolute; top:12px; left:12px; font-weight:700; text-shadow:0 1px 2px rgba(0,0,0,.35);
-      user-select:none; pointer-events:none;
-    }
-    .help{
-      position:absolute; bottom:10px; left:12px; opacity:.9; font-size:13px; line-height:1.3; user-select:none;
-    }
-    .toast{
-      position:absolute; top:12px; right:12px; background:rgba(0,0,0,.5);
-      padding:6px 10px; border-radius:8px; font-size:13px;
-    }
-  </style>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0"/>
+<title>Pizza Peddler — Frogger: Pilsen Delivery</title>
+<style>
+  :root{
+    --sky:#8fd0f4; --road:#3f3f46; --side:#6e6e78; --grass:#62b46b; --ink:#111; --white:#fff;
+    --cta:#ff5ca8; --stoop:#2d8b57; --stoop-ok:#2ecc71;
+  }
+  *{box-sizing:border-box}
+  html,body{height:100%;margin:0;background:#1f2026;color:var(--white);font-family:system-ui,Segoe UI,Roboto,Helvetica,Arial,sans-serif;overflow:hidden}
+  .wrap{position:relative;width:100vw;height:100vh;display:grid;place-items:center}
+  canvas{
+    border:2px solid var(--white);
+    background:var(--sky);
+    width:min(100vw,1100px);height:min(78vh,800px);max-height:calc(100vh - 40px);
+    image-rendering:pixelated
+  }
+  .hud{position:absolute;top:10px;left:12px;font-weight:700;text-shadow:0 1px 2px rgba(0,0,0,.35);user-select:none;pointer-events:none}
+  .help{position:absolute;bottom:10px;left:12px;opacity:.9;font-size:13px;line-height:1.3;user-select:none}
+  .toast{position:absolute;top:10px;right:12px;background:rgba(0,0,0,.5);padding:6px 10px;border-radius:8px;font-size:13px}
+</style>
 </head>
 <body>
   <div class="wrap">
-    <div class="hud" id="hud">Score: 0 | Lives: 3 | Level: 1 | Deliveries: 0</div>
+    <div class="hud" id="hud">Score: 0 | Lives: 3 | Round: 1 | Time: 30s</div>
     <div class="toast" id="toast"></div>
     <canvas id="c" width="1000" height="650"></canvas>
     <div class="help">
-      ▲/▼ lane • ◀/▶ nudge • Hold SPACE to aim, release to throw • R to restart<br/>
-      Deliver to green stoop/door +150 • Yard +50 • Break window −100
+      ▲/▼/◀/▶ move • SPACE to deliver at the glowing stoop • R to restart<br/>
+      Get from the Pizzeria (bottom) to the lit green stoop (top). Cars, buses, cyclists, Pink Line, and pedestrians are hazards.
     </div>
   </div>
 
-  <script>
-    const canvas = document.getElementById('c');
-    const ctx = canvas.getContext('2d');
-    const HUD = document.getElementById('hud');
-    const TOAST = document.getElementById('toast');
-    const W = canvas.width, H = canvas.height;
+<script>
+const canvas = document.getElementById('c');
+const ctx = canvas.getContext('2d');
+const HUD = document.getElementById('hud');
+const TOAST = document.getElementById('toast');
+const W = canvas.width, H = canvas.height;
 
-    // --- WORLD / PILSEN THEME SETTINGS ---
-    const LANES = [150, 340, 530];            // three sidewalks / bike lanes
-    const ROAD_Y1 = 110, ROAD_Y2 = H - 110;   // road vertical band
-    const SCROLL_BASE = 3.2;                  // base scroll
-    const GRAVITY = 0.35;
-    const MAX_HOLD = 900;                     // ms
-    const LEVEL_UP_WAVES = 6;
+// ----- LAYOUT (rows from bottom to top) -----
+// 0: Bottom sidewalk (Pizzeria / start)         SAFE
+// 1: Car lane eastbound                          DANGER
+// 2: Bus lane westbound                          DANGER (wider)
+// 3: Bike lane eastbound                         DANGER (fast)
+// 4: CTA crossing (train occasionally blocks)    DANGER when train
+// 5: Pedestrian lane westbound                   DANGER
+// 6: Top sidewalk with houses / stoops (goal)    SAFE
+const ROWS = 7;
+const ROW_H = Math.floor((H - 90) / ROWS); // leave some top/bottom margin
+const ROW_Y = r => H - 40 - (r+1)*ROW_H;   // y top of row r
 
-    // Player (bike)
-    const player = { x: 140, y: LANES[1]-20, w:46, h:30, laneIdx:1, invuln:0, aiming:false, aimHold:0 };
+// Player
+const player = { w:28,h:28, x:W/2-14, y:ROW_Y(0)+ROW_H/2-14, row:0, col:5, inv:0 };
+const GRID_COLS = 11;
+const COL_W = Math.floor(W/GRID_COLS);
 
-    // Game state
-    let score=0, lives=3, deliveries=0, level=1, wave=0, gameOver=false, flash=0, scroll=0, last=0;
+// Game state
+let score=0, lives=3, roundN=1, timeLeft=30, timerMs=0, gameOver=false, last=0, flash=0;
 
-    const houses=[], obstacles=[], pizzas=[], banners=[], trains=[];
-    const keys={};
-    onkeydown = e => { keys[e.code]=true; };
-    onkeyup   = e => { keys[e.code]=false; if (e.code==='Space') releaseThrow(); };
-    addEventListener('keydown', e=>{ if(e.code==='KeyR' && gameOver) reset(); });
+// Entities
+const cars=[], buses=[], bikes=[], peds=[];
+let train=null; // {x,w,h,y,active}
+let trainTimer=0, trainGap=5000; // ms until next possible train
 
-    // Helpers
-    const rand =(a,b)=> Math.random()*(b-a)+a;
-    const irand=(a,b)=> Math.floor(rand(a,b));
-    const clamp=(n,mi,ma)=> Math.max(mi, Math.min(ma, n));
+// Goal houses (slots on top sidewalk)
+const stoops = [];
+let goalIdx = 0;
 
-    function toast(msg, ms=1200){
-      TOAST.textContent = msg; TOAST.style.opacity='1';
-      clearTimeout(toast._t); toast._t=setTimeout(()=>TOAST.style.opacity='0', ms);
+// Input
+const keys={};
+onkeydown = e => { keys[e.code]=true; };
+onkeyup   = e => { keys[e.code]=false; if(e.code==='Space') attemptDeliver(); };
+addEventListener('keydown', e => { if(e.code==='KeyR' && gameOver) reset(); });
+
+// Utilities
+const rand=(a,b)=>Math.random()*(b-a)+a;
+const irand=(a,b)=>Math.floor(rand(a,b));
+const clamp=(n,mi,ma)=>Math.max(mi,Math.min(ma,n));
+function toast(msg, ms=1200){ TOAST.textContent=msg; TOAST.style.opacity='1'; clearTimeout(toast._t); toast._t=setTimeout(()=>TOAST.style.opacity='0',ms); }
+function rectHit(a,b){ return a.x<b.x+b.w && a.x+a.w>b.x && a.y<b.y+b.h && a.y+a.h>b.y; }
+function cellToXY(row, col){ return { x: col*COL_W + (COL_W-player.w)/2, y: ROW_Y(row)+ROW_H/2 - player.h/2 }; }
+
+// ---- Build the top row houses/stoops ----
+function buildStoops(){
+  stoops.length=0;
+  const y = ROW_Y(6)+ROW_H-18;
+  for(let i=0;i<6;i++){
+    const w=56,h=12;
+    const x = 40 + i*(W-120)/5 - w/2;
+    const door = { x:x+18, y:y-32, w:20, h:28 };
+    const win  = { x:x+42, y:y-56, w:18, h:14, broken:false };
+    const body = pick(['#ec6b6b','#f8a356','#f5d061','#66c7a6','#6aa8f2','#c78cf2','#f28dc1']);
+    stoops.push({ x,y,w,h, door, win, body, highlight:false });
+  }
+  goalIdx = irand(0, stoops.length);
+  stoops[goalIdx].highlight = true;
+}
+
+function pick(arr){ return arr[irand(0,arr.length)]; }
+
+// ---- Spawners ----
+function spawnCar(){
+  // row 1 eastbound
+  const y = ROW_Y(1) + ROW_H/2 - 14;
+  cars.push({ x: -120, y, w:54, h:28, vx: 2.2 + roundN*0.15, color:'#e74c3c' });
+}
+function spawnBus(){
+  // row 2 westbound
+  const y = ROW_Y(2) + ROW_H/2 - 18;
+  buses.push({ x: W+200, y, w:98, h:36, vx: -(1.6 + roundN*0.12), color:'#f4b942' });
+}
+function spawnBike(){
+  // row 3 eastbound
+  const y = ROW_Y(3) + ROW_H/2 - 10;
+  bikes.push({ x: -80, y, w:40, h:20, vx: 3.0 + roundN*0.2, color:'#3ddc97' });
+}
+function spawnPed(){
+  // row 5 westbound
+  const y = ROW_Y(5) + ROW_H/2 - 14;
+  peds.push({ x: W+60, y, w:24, h:28, vx: -(1.4 + roundN*0.08), color:'#8e5a2b' });
+}
+function maybeStartTrain(dt){
+  trainTimer += dt;
+  if (train && train.active) return;
+  if (trainTimer > trainGap && Math.random() < 0.02){
+    trainTimer = 0;
+    trainGap = irand(4500, 8000);
+    train = { x: -320, y: ROW_Y(4)+ROW_H/2-12, w: irand(260, 360), h: 24, vx: 3.0 + roundN*0.18, active:true };
+  }
+}
+
+// ---- Movement & collisions ----
+function tryMove(dx, dy){
+  const nx = clamp(player.x + dx, 0, W - player.w);
+  const ny = clamp(player.y + dy, 0, H - player.h);
+  const oldRow = player.row;
+  player.x = nx; player.y = ny;
+  // update row/col estimate
+  player.row = clamp(Math.floor((H - 40 - (player.y + player.h/2)) / ROW_H), 0, ROWS-1);
+  player.col = clamp(Math.floor((player.x + player.w/2) / COL_W), 0, GRID_COLS-1);
+  // tiny snap when changing rows to center
+  if (player.row !== oldRow){
+    const snap = cellToXY(player.row, player.col);
+    player.x = snap.x; player.y = snap.y;
+  }
+}
+
+function resetToStart(){
+  const p = cellToXY(0, 5);
+  player.x = p.x; player.y = p.y; player.row=0; player.col=5; player.inv = 30;
+}
+
+function hit(){
+  if (player.inv>0 || gameOver) return;
+  lives--; flash=10; resetToStart();
+  if (lives<=0){ gameOver=true; }
+}
+
+function attemptDeliver(){
+  if (gameOver) return;
+  // Must be on top row and over highlighted stoop
+  if (player.row===6){
+    const s = stoops[goalIdx];
+    const pRect = { x: player.x, y: player.y, w: player.w, h: player.h };
+    const goalRect = { x: s.x, y: s.y-4, w: s.w, h: s.h+8 };
+    if (rectHit(pRect, goalRect)){
+      // Delivered!
+      score += 200 + Math.floor(timeLeft)*5;
+      roundN++;
+      timeLeft = 30 + Math.min(10, roundN*2);
+      // new goal
+      stoops.forEach(t=>t.highlight=false);
+      goalIdx = irand(0, stoops.length);
+      stoops[goalIdx].highlight=true;
+      resetToStart();
+      toast('Delivery complete!');
+      // difficulty bump by increasing spawn frequency slightly
+      carSpawnDelay = Math.max(450, carSpawnDelay-20);
+      busSpawnDelay = Math.max(650, busSpawnDelay-15);
+      bikeSpawnDelay= Math.max(400, bikeSpawnDelay-15);
+      pedSpawnDelay = Math.max(500, pedSpawnDelay-15);
+    } else {
+      toast('Wrong stoop! Look for the glowing one.');
     }
+  } else {
+    toast('Reach the glowing stoop to deliver.');
+  }
+}
 
-    // --- Pilsen palette / storefront generators ---
-    const muralColors = [
-      "#ff595e","#ffca3a","#8ac926","#1982c4","#6a4c93","#f28482","#84a59d","#f6bd60"
-    ];
-    const facadeColors = ["#ec6b6b","#f8a356","#f5d061","#66c7a6","#6aa8f2","#c78cf2","#f28dc1","#f2c6de"];
-    const awningColors = ["#e63946","#43aa8b","#577590","#e76f51","#2a9d8f","#9d4edd"];
+// Spawn cadence (ms)
+let carSpawnDelay=900, carMs=0;
+let busSpawnDelay=1100, busMs=0;
+let bikeSpawnDelay=800, bikeMs=0;
+let pedSpawnDelay=950, pedMs=0;
 
-    function makeStore(x, laneIdx){
-      const yCenter = LANES[laneIdx];
-      const w = irand(90, 140), h = irand(80, 110);
-      const y = yCenter - h/2 - 22;
+// ---- Update ----
+function update(dt){
+  if (gameOver) return;
 
-      // Style
-      const isStore = Math.random() < 0.55;
-      const isMural = !isStore && Math.random() < 0.6;
-      const body = isMural ? muralColors[irand(0,muralColors.length)] : facadeColors[irand(0,facadeColors.length)];
-      const hasAwning = isStore && Math.random() < 0.8;
-      const awning = awningColors[irand(0,awningColors.length)];
-      const sign = isStore ? (Math.random()<0.5 ? "TAQUERÍA" : "PANADERÍA") : (Math.random()<0.5 ? "MERCADO" : "CAFÉ");
+  timerMs += dt;
+  if (timerMs > 1000){ timerMs -= 1000; timeLeft = Math.max(0, timeLeft-1); if (timeLeft===0){ hit(); timeLeft = 30; } }
 
-      // Targets
-      const stoop = { x: x+10, y: y+h-12, w: 50, h: 12 };
-      const door  = { x: x+20, y: y+h-44, w: 20, h: 32 };
-      const win   = { x: x+55, y: y+18, w: 20, h: 16, broken:false };
+  // input
+  const stepX = COL_W; const stepY = ROW_H;
+  if (keys['ArrowUp'])    { tryMove(0, -stepY); keys['ArrowUp']=false; }
+  if (keys['ArrowDown'])  { tryMove(0, +stepY); keys['ArrowDown']=false; }
+  if (keys['ArrowLeft'])  { tryMove(-stepX, 0); keys['ArrowLeft']=false; }
+  if (keys['ArrowRight']) { tryMove(+stepX, 0); keys['ArrowRight']=false; }
 
-      return { x,y,w,h,laneIdx, body, isMural, isStore, hasAwning, awning, sign, stoop, door, win, delivered:false, scored:false };
+  // spawns
+  carMs += dt; if (carMs > carSpawnDelay){ carMs=0; if (Math.random()<0.9) spawnCar(); }
+  busMs += dt; if (busMs > busSpawnDelay){ busMs=0; if (Math.random()<0.85) spawnBus(); }
+  bikeMs+= dt; if (bikeMs> bikeSpawnDelay){ bikeMs=0; if (Math.random()<0.9) spawnBike(); }
+  pedMs += dt; if (pedMs > pedSpawnDelay){ pedMs=0; if (Math.random()<0.85) spawnPed(); }
+  maybeStartTrain(dt);
+
+  // move entities
+  cars.forEach(o=> o.x += o.vx);
+  buses.forEach(o=> o.x += o.vx);
+  bikes.forEach(o=> o.x += o.vx);
+  peds.forEach(o=> o.x += o.vx);
+  if (train && train.active){ train.x += train.vx; if (train.x > W+40) train.active=false; }
+
+  // prune off-screen
+  prune(cars, o=> o.x > W+160);
+  prune(buses,o=> o.x < -200);
+  prune(bikes,o=> o.x > W+120);
+  prune(peds, o=> o.x < -140);
+
+  // collisions (only when player is on dangerous rows)
+  const pRect = { x: player.x, y: player.y, w: player.w, h: player.h };
+  if (player.row===1){ cars.forEach(o=> rectHit(pRect,o)&&hit()); }
+  if (player.row===2){ buses.forEach(o=> rectHit(pRect,o)&&hit()); }
+  if (player.row===3){ bikes.forEach(o=> rectHit(pRect,o)&&hit()); }
+  if (player.row===4 && train && train.active){
+    // treat the whole crossing as blocked when the train overlaps the row band
+    const band = { x:-10, y: ROW_Y(4), w: W+20, h: ROW_H };
+    const tRect= { x: train.x, y: train.y, w: train.w, h: train.h };
+    if (rectHit(pRect, tRect) || rectHit(tRect, band) && Math.abs((player.y+player.h/2)-(ROW_Y(4)+ROW_H/2))<ROW_H/2){
+      hit();
     }
+  }
+  if (player.row===5){ peds.forEach(o=> rectHit(pRect,o)&&hit()); }
 
-    function makeObstacle(x){
-      const types = ['car','dog','pothole','cone'];
-      const type = types[irand(0, types.length)];
-      const y = irand(ROAD_Y1+60, ROAD_Y2-60);
-      const speed = SCROLL_BASE + rand(1.6, 3.6) + level*0.2;
-      const size = type==='car' ? {w:78,h:36} :
-                   type==='dog' ? {w:46,h:26} :
-                   type==='cone'? {w:18,h:24} : {w:34,h:14};
-      return { type, x, y, ...size, speed };
-    }
+  if (player.inv>0) player.inv--;
 
-    function makeBanner(x){
-      // papel picado string across street
-      const y = irand(75, 100);
-      const span = irand(180, 260);
-      return { x, y, span, colors: Array.from({length:8},()=>muralColors[irand(0,muralColors.length)]) };
-    }
+  HUD.textContent = `Score: ${score} | Lives: ${lives} | Round: ${roundN} | Time: ${Math.ceil(timeLeft)}s`;
+}
 
-    function makeTrain(x){
-      // Pink Line elevated train passing on top viaduct
-      return { x, y: 92, w: irand(240, 360), h: 22, speed: SCROLL_BASE + 2.2 };
-    }
+function prune(arr, pred){ for (let i=arr.length-1;i>=0;i--) if (pred(arr[i])) arr.splice(i,1); }
 
-    // --- Spawners / waves ---
-    function spawnWave(){
-      wave++;
-      const count = 3 + Math.min(4, level); // stores per wave
-      const lanes = [0,1,2].sort(()=>Math.random()-0.5);
-      for(let i=0;i<count;i++){
-        const lane = lanes[i % lanes.length];
-        const baseX = W + 240 + i * irand(280, 360);
-        houses.push(makeStore(baseX, lane));
-      }
-      const obsCount = 2 + Math.min(4, level);
-      for (let i=0;i<obsCount;i++){
-        obstacles.push(makeObstacle(W + 220 + i * irand(240, 380)));
-      }
-      if (Math.random() < 0.6) banners.push(makeBanner(W + irand(220, 460)));
-      if (Math.random() < 0.45) trains.push(makeTrain(W + irand(320, 520)));
+// ---- Draw ----
+function draw(){
+  // sky
+  ctx.fillStyle = '#bfe7fb'; ctx.fillRect(0,0,W,H);
 
-      if (wave % LEVEL_UP_WAVES === 0){ level++; toast(`¡Nivel ${level}!`); }
-    }
+  drawSkyline();
 
-    // --- Throw physics (arc) ---
-    function releaseThrow(){
-      if (gameOver || !player.aiming) return;
-      const t = Math.min(player.aimHold, MAX_HOLD)/MAX_HOLD; // 0..1
-      const ang = 0.35 + t*0.95;        // 20°..~73°
-      const spd = 9 + t*6;
-      const dir = keys['ArrowLeft'] ? -1 : 1;
-      pizzas.push({ x: player.x + player.w, y: player.y, w:16, h:10,
-                    vx: Math.cos(ang)*spd*dir, vy: -Math.sin(ang)*spd });
-      player.aiming=false; player.aimHold=0;
-    }
+  // CTA viaduct line (row 4)
+  ctx.fillStyle = '#3a3f46';
+  const vy = ROW_Y(4)+ROW_H/2-2;
+  ctx.fillRect(0, vy, W, 6);
+  // posts
+  ctx.fillStyle = '#2e333a';
+  for (let i=0;i<W;i+=120) ctx.fillRect(i, vy+6, 10, 44);
 
-    // --- Update ---
-    function update(dt){
-      if (gameOver) return;
-
-      // Aim / charge
-      if (keys['Space']){ player.aiming = true; player.aimHold += dt; }
-
-      // Lanes & nudge
-      if (keys['ArrowUp'] && player.laneIdx>0){ player.laneIdx--; keys['ArrowUp']=false; }
-      if (keys['ArrowDown'] && player.laneIdx<2){ player.laneIdx++; keys['ArrowDown']=false; }
-      player.y = LANES[player.laneIdx]-20;
-      if (keys['ArrowLeft'])  player.x = clamp(player.x-4, 60, W*0.62);
-      if (keys['ArrowRight']) player.x = clamp(player.x+4, 60, W*0.62);
-
-      // Scroll speed scales with level
-      const s = SCROLL_BASE + (level-1)*0.6;
-      scroll += s;
-
-      // Move entities
-      houses.forEach(h=> h.x -= s);
-      obstacles.forEach(o=> o.x -= o.speed);
-      banners.forEach(b=> b.x -= s*0.95);
-      trains.forEach(t=> t.x -= t.speed);
-
-      // Pizzas
-      for (let i=pizzas.length-1;i>=0;i--){
-        const p = pizzas[i];
-        p.vy += GRAVITY; p.x += p.vx; p.y += p.vy;
-        if (p.y > H-60){ pizzas.splice(i,1); continue; }
-
-        for (const h of houses){
-          // Yard/facade
-          if (rectHit(p,h)){ score += 50; pizzas.splice(i,1); break; }
-          // Stoop (delivery)
-          if (rectHit(p,h.stoop)){
-            if (!h.delivered){ h.delivered=true; deliveries++; score+=150; }
-            pizzas.splice(i,1); break;
-          }
-          // Window (break)
-          if (!h.win.broken && rectHit(p,h.win)){
-            h.win.broken=true; score = Math.max(0, score-100); flash=8; pizzas.splice(i,1); break;
-          }
-        }
-      }
-
-      // Clear off-screen
-      prune(houses, h=> h.x + h.w < -60);
-      prune(obstacles, o=> o.x + o.w < -60);
-      prune(banners, b=> b.x + b.span < -60);
-      prune(trains, t=> t.x + t.w < -60);
-      if (houses.length < 2) spawnWave();
-
-      // Collisions with road obstacles
-      if (player.invuln>0) player.invuln--;
-      for (const o of obstacles){
-        if (rectsOverlap(player,o) && player.invuln<=0){
-          lives--; player.invuln=45; flash=10; if (lives<=0) gameOver=true; break;
-        }
-      }
-
-      HUD.textContent = `Score: ${score} | Lives: ${lives} | Level: ${level} | Deliveries: ${deliveries}`;
-    }
-
-    const prune=(arr,p)=>{ for(let i=arr.length-1;i>=0;i--) if(p(arr[i])) arr.splice(i,1); };
-    const rectHit=(a,b)=> a.x < b.x+b.w && a.x+a.w > b.x && a.y < b.y+b.h && a.y+a.h > b.y;
-    const rectsOverlap=(a,b)=> rectHit(a,b);
-
-    // --- Draw ---
-    function draw(){
-      // sky gradient
-      const g = ctx.createLinearGradient(0,0,0,H);
-      g.addColorStop(0, '#bfe7fb'); g.addColorStop(1, varGet('--sky'));
-      ctx.fillStyle = g; ctx.fillRect(0,0,W,H);
-
-      drawSkyline();
-      drawPinkLine();
-      drawStreetBase();
-      drawBanners();
-
-      // Stores / houses
-      for (const h of houses){
-        // building
-        ctx.fillStyle = h.body; ctx.fillRect(h.x, h.y, h.w, h.h);
-        // roof line
-        ctx.fillStyle = '#2b2b30'; ctx.fillRect(h.x-2, h.y-6, h.w+4, 6);
-
-        // mural pattern
-        if (h.isMural){
-          for(let i=0;i<6;i++){
-            ctx.fillStyle = muralColors[irand(0,muralColors.length)];
-            const mw = irand(10,18), mh = irand(10,18);
-            const mx = h.x + irand(4, h.w- mw -4);
-            const my = h.y + irand(6, h.h- mh -6);
-            ctx.fillRect(mx,my,mw,mh);
-          }
-        }
-
-        // windows/door
-        ctx.fillStyle = h.win.broken ? '#a33d3d' : '#aee6ff';
-        ctx.fillRect(h.win.x, h.win.y, h.win.w, h.win.h);
-        ctx.fillStyle = '#dfe7f3'; ctx.fillRect(h.door.x, h.door.y, h.door.w, h.door.h);
-
-        // stoop target
-        ctx.fillStyle = h.delivered ? '#2ecc71' : '#2d8b57';
-        ctx.fillRect(h.stoop.x, h.stoop.y, h.stoop.w, h.stoop.h);
-
-        // awning & sign for storefronts
-        if (h.isStore && h.hasAwning){
-          ctx.fillStyle = h.awning;
-          ctx.fillRect(h.x+4, h.y+8, h.w-8, 10);
-        }
-        if (h.isStore){
-          ctx.fillStyle = '#111';
-          ctx.fillRect(h.x+8, h.y+h.h-34, h.w-16, 20);
-          ctx.fillStyle = '#f7f7f7';
-          ctx.font = 'bold 12px Arial'; ctx.textAlign='center';
-          ctx.fillText(h.sign, h.x + h.w/2, h.y+h.h-19);
-          ctx.textAlign='left';
-        }
-      }
-
-      // obstacles
-      for (const o of obstacles){
-        if (o.type==='car'){
-          ctx.fillStyle = '#e63946'; ctx.fillRect(o.x,o.y,o.w,o.h);
-          ctx.fillStyle = '#111';
-          ctx.fillRect(o.x+8, o.y+o.h-7, 12,7);
-          ctx.fillRect(o.x+o.w-20, o.y+o.h-7, 12,7);
-        } else if (o.type==='dog'){
-          ctx.fillStyle = '#8e5a2b'; ctx.fillRect(o.x,o.y,o.w,o.h);
-          ctx.fillStyle = '#000'; ctx.fillRect(o.x+o.w-6, o.y+5, 6,6);
-        } else if (o.type==='cone'){
-          ctx.fillStyle = '#ef6c00';
-          ctx.beginPath(); ctx.moveTo(o.x, o.y+o.h); ctx.lineTo(o.x+o.w/2, o.y); ctx.lineTo(o.x+o.w, o.y+o.h); ctx.closePath(); ctx.fill();
-        } else { // pothole
-          ctx.fillStyle = '#2a2a2a';
-          ctx.beginPath(); ctx.ellipse(o.x+o.w/2, o.y+o.h/2, o.w/2, o.h/2, 0, 0, Math.PI*2); ctx.fill();
-        }
-      }
-
-      // pizzas
-      for (const p of pizzas){
-        ctx.fillStyle = '#c07c3a'; ctx.fillRect(p.x,p.y,p.w,p.h);
-        ctx.fillStyle = '#f5d27a'; ctx.fillRect(p.x+2,p.y+2,p.w-4,p.h-4);
-      }
-
-      // player bike (simple)
-      const blink = (player.invuln>0 && Math.floor(player.invuln/3)%2===0);
-      if (!blink){
-        ctx.fillStyle = '#ff355e';
-        ctx.fillRect(player.x, player.y, player.w, player.h);
-        ctx.fillStyle = '#111';
-        circle(player.x+9, player.y+player.h, 9);
-        circle(player.x+player.w-9, player.y+player.h, 9);
-      }
-
-      // aim guide
-      if (player.aiming){
-        const t = Math.min(player.aimHold, MAX_HOLD)/MAX_HOLD;
-        const ang = 0.35 + t*0.95; const len = 64 + t*46;
-        ctx.strokeStyle = '#fff'; ctx.lineWidth=2;
-        ctx.beginPath();
-        ctx.moveTo(player.x+player.w, player.y+6);
-        ctx.lineTo(player.x+player.w + Math.cos(ang)*len, player.y+6 - Math.sin(ang)*len);
-        ctx.stroke();
-      }
-
-      // flash
-      if (flash>0){ flash--; ctx.fillStyle='rgba(255,255,255,.25)'; ctx.fillRect(0,0,W,H); }
-
-      if (gameOver){
-        ctx.fillStyle='rgba(0,0,0,.6)'; ctx.fillRect(0,0,W,H);
-        ctx.fillStyle='#fff'; ctx.textAlign='center';
-        ctx.font='bold 40px Arial'; ctx.fillText('Game Over', W/2, H/2 - 20);
-        ctx.font='24px Arial';
-        ctx.fillText(`Final Score: ${score}  Deliveries: ${deliveries}  Level: ${level}`, W/2, H/2 + 20);
-        ctx.fillText('Press R to Restart', W/2, H/2 + 60);
-        ctx.textAlign='left';
+  // road & sidewalks
+  for (let r=0;r<ROWS;r++){
+    const y = ROW_Y(r);
+    if (r===0 || r===6){
+      // sidewalks
+      ctx.fillStyle = '#6e6e78'; ctx.fillRect(0,y,W,ROW_H);
+      // curb grass edge
+      ctx.fillStyle = '#62b46b';
+      if (r===0) ctx.fillRect(0,y+ROW_H-6,W,6); else ctx.fillRect(0,y,W,6);
+    } else {
+      // road/passage lanes
+      ctx.fillStyle = '#3f3f46'; ctx.fillRect(0,y,W,ROW_H);
+      // dashed lane lines for traffic rows
+      if ([1,2,3].includes(r)){
+        ctx.strokeStyle = '#bbb'; ctx.lineWidth=2; ctx.setLineDash([10,12]);
+        ctx.beginPath(); ctx.moveTo(0, y+ROW_H/2); ctx.lineTo(W, y+ROW_H/2); ctx.stroke();
+        ctx.setLineDash([]);
       }
     }
+  }
 
-    function drawStreetBase(){
-      // top/bottom grassy berms
-      ctx.fillStyle = varGet('--grass'); ctx.fillRect(0,0,W,60);
-      ctx.fillRect(0,H-60,W,60);
+  // bottom: Pizzeria
+  drawPizzeria();
+  // top: Houses + goal stoop
+  drawHouses();
 
-      // road and sidewalks
-      ctx.fillStyle = varGet('--road'); ctx.fillRect(0,ROAD_Y1,W,ROAD_Y2-ROAD_Y1);
-      // curbs
-      ctx.fillStyle = '#555'; ctx.fillRect(0, ROAD_Y1-8, W, 8);
-      ctx.fillRect(0, ROAD_Y2, W, 8);
-      // sidewalks (lane markers)
-      ctx.strokeStyle = varGet('--lane'); ctx.lineWidth=2; ctx.setLineDash([10,12]);
-      LANES.forEach(y=>{ ctx.beginPath(); ctx.moveTo(0,y+20); ctx.lineTo(W,y+20); ctx.stroke(); });
-      ctx.setLineDash([]);
-      // 18th Street text (subtle)
-      ctx.fillStyle = 'rgba(255,255,255,.07)'; ctx.font='bold 48px Arial';
-      ctx.fillText('18TH ST', W-260, H-24);
+  // entities
+  cars.forEach(drawCar);
+  buses.forEach(drawBus);
+  bikes.forEach(drawBike);
+  peds.forEach(drawPed);
+  if (train && train.active) drawTrain();
+
+  // player
+  const blink = (player.inv>0 && Math.floor(player.inv/3)%2===0);
+  if (!blink){
+    ctx.fillStyle = '#ff355e';
+    ctx.fillRect(player.x, player.y, player.w, player.h);
+    ctx.fillStyle = '#111';
+    ctx.beginPath(); ctx.arc(player.x+8, player.y+player.h, 8, 0, Math.PI*2); ctx.fill();
+    ctx.beginPath(); ctx.arc(player.x+player.w-8, player.y+player.h, 8, 0, Math.PI*2); ctx.fill();
+  }
+
+  if (flash>0){ flash--; ctx.fillStyle='rgba(255,255,255,.25)'; ctx.fillRect(0,0,W,H); }
+
+  if (gameOver){
+    ctx.fillStyle='rgba(0,0,0,.65)'; ctx.fillRect(0,0,W,H);
+    ctx.fillStyle='#fff'; ctx.textAlign='center';
+    ctx.font='bold 42px Arial'; ctx.fillText('Game Over', W/2, H/2 - 28);
+    ctx.font='22px Arial'; ctx.fillText(`Score: ${score} • Round: ${roundN}`, W/2, H/2 + 8);
+    ctx.fillText('Press R to Restart', W/2, H/2 + 40);
+    ctx.textAlign='left';
+  }
+}
+
+function drawSkyline(){
+  ctx.fillStyle = '#5aa1c9';
+  let base = (last*0.02) % (W+400);
+  const x = -base;
+  // hint of Willis Tower + blocks
+  ctx.fillRect(x+300, 50, 34, 220);
+  ctx.fillRect(x+312, 22, 10, 28);
+  ctx.fillRect(x+320, 10, 6, 40);
+  const blocks = [ [60,140,40,140],[120,120,60,160],[210,100,40,180],
+                   [380,130,70,150],[470,110,44,170],[530,150,54,130],
+                   [600,100,40,180],[660,130,70,150],[750,140,50,140],[820,120,60,160] ];
+  blocks.forEach(b=> ctx.fillRect(x+b[0], b[1], b[2], b[3]));
+}
+
+function drawPizzeria(){
+  const r=0, y=ROW_Y(r);
+  ctx.fillStyle='#b54e3a';
+  ctx.fillRect(24, y+6, 140, ROW_H-12);
+  // awning
+  ctx.fillStyle='#43aa8b'; ctx.fillRect(28, y+10, 132, 12);
+  // sign
+  ctx.fillStyle='#111'; ctx.fillRect(36, y+ROW_H-34, 116, 22);
+  ctx.fillStyle='#f7f7f7'; ctx.font='bold 12px Arial'; ctx.textAlign='center';
+  ctx.fillText('PIZZERÍA', 36+58, y+ROW_H-19); ctx.textAlign='left';
+  // label
+  ctx.fillStyle='rgba(255,255,255,.7)'; ctx.font='12px Arial';
+  ctx.fillText('Start', 36, y+22);
+}
+
+function drawHouses(){
+  const r=6, y=ROW_Y(r);
+  stoops.forEach((s,i)=>{
+    // house body
+    ctx.fillStyle = s.body; ctx.fillRect(s.x-10, y+6-70, s.w+20, 70);
+    // roof line
+    ctx.fillStyle = '#2b2b30'; ctx.fillRect(s.x-12, y+6-76, s.w+24, 6);
+    // window
+    ctx.fillStyle = s.win.broken ? '#a33d3d' : '#aee6ff';
+    ctx.fillRect(s.win.x, s.win.y, s.win.w, s.win.h);
+    // door
+    ctx.fillStyle = '#dfe7f3'; ctx.fillRect(s.door.x, s.door.y, s.door.w, s.door.h);
+    // stoop (goal)
+    ctx.fillStyle = s.highlight ? 'rgba(46, 204, 113, .8)' : '#2d8b57';
+    ctx.fillRect(s.x, s.y, s.w, s.h);
+    if (s.highlight){
+      // glow rim
+      ctx.strokeStyle='rgba(46, 204, 113, .85)'; ctx.lineWidth=3;
+      ctx.strokeRect(s.x-2, s.y-2, s.w+4, s.h+4);
     }
+  });
+}
 
-    function drawSkyline(){
-      // distant skyline silhouette (left to right)
-      ctx.fillStyle = '#5aa1c9';
-      let base = (scroll*0.15) % (W+400);
-      const x = -base;
-      // simple blocks as skyline; hint of Willis Tower
-      ctx.fillRect(x+60, 140, 40, 140);
-      ctx.fillRect(x+120, 120, 60, 160);
-      ctx.fillRect(x+210, 100, 40, 180);
-      // Willis-ish
-      ctx.fillRect(x+300, 60, 34, 220);
-      ctx.fillRect(x+312, 30, 10, 30);
-      ctx.fillRect(x+320, 20, 6, 40);
-      ctx.fillRect(x+380, 130, 70, 150);
-      ctx.fillRect(x+470, 110, 44, 170);
-      ctx.fillRect(x+530, 150, 54, 130);
-      ctx.fillRect(x+600, 100, 40, 180);
-      ctx.fillRect(x+660, 130, 70, 150);
-      ctx.fillRect(x+750, 140, 50, 140);
-      ctx.fillRect(x+820, 120, 60, 160);
-    }
+function drawCar(o){
+  ctx.fillStyle = o.color; ctx.fillRect(o.x,o.y,o.w,o.h);
+  ctx.fillStyle = '#111';
+  ctx.fillRect(o.x+6, o.y+o.h-6, 12,6);
+  ctx.fillRect(o.x+o.w-18, o.y+o.h-6, 12,6);
+}
+function drawBus(o){
+  ctx.fillStyle = o.color; ctx.fillRect(o.x,o.y,o.w,o.h);
+  ctx.fillStyle = '#333'; for(let i=0;i<o.w-16;i+=22) ctx.fillRect(o.x+8+i,o.y+6,16,10);
+  ctx.fillStyle = '#111'; ctx.fillRect(o.x+10, o.y+o.h-7, 16,7); ctx.fillRect(o.x+o.w-26, o.y+o.h-7, 16,7);
+}
+function drawBike(o){
+  ctx.fillStyle = o.color; ctx.fillRect(o.x,o.y,o.w,o.h);
+  ctx.fillStyle = '#111'; ctx.fillRect(o.x+4, o.y+o.h-5, 10,5); ctx.fillRect(o.x+o.w-14, o.y+o.h-5, 10,5);
+}
+function drawPed(o){
+  ctx.fillStyle = o.color; ctx.fillRect(o.x,o.y,o.w,o.h);
+}
+function drawTrain(){
+  const t = train;
+  ctx.fillStyle='#d9d9d9'; ctx.fillRect(t.x, t.y, t.w, t.h);
+  ctx.fillStyle= '#ff5ca8'; ctx.fillRect(t.x, t.y+8, t.w, 6);
+  ctx.fillStyle= '#1d3557'; for(let i=0;i<t.w; i+=26) ctx.fillRect(t.x+6+i, t.y+4, 16, 10);
+  // crossing lights
+  const ly = ROW_Y(4)+ROW_H-8;
+  ctx.fillStyle = '#c0392b'; ctx.beginPath(); ctx.arc(40, ly, 6, 0, Math.PI*2); ctx.fill();
+  ctx.beginPath(); ctx.arc(W-40, ly, 6, 0, Math.PI*2); ctx.fill();
+}
 
-    function drawPinkLine(){
-      // viaduct beam
-      ctx.fillStyle = '#3a3f46';
-      ctx.fillRect(0, 110, W, 8);
-      // trains
-      for (const t of trains){
-        ctx.fillStyle = '#d9d9d9';
-        ctx.fillRect(t.x, t.y, t.w, t.h);
-        // pink stripe
-        ctx.fillStyle = '#ff5ca8'; ctx.fillRect(t.x, t.y+8, t.w, 6);
-        // windows
-        ctx.fillStyle = '#1d3557';
-        for (let i=0;i<t.w; i+=26) ctx.fillRect(t.x+6+i, t.y+4, 16, 10);
-      }
-      // posts
-      ctx.fillStyle = '#2e333a';
-      for (let i=0;i<W;i+=120) ctx.fillRect(i, 118, 10, 40);
-    }
+// ---- Loop ----
+function loop(ts){
+  const dt = Math.min(40, ts - (last||ts)); last = ts;
+  update(dt); draw(); requestAnimationFrame(loop);
+}
 
-    function drawBanners(){
-      for (const b of banners){
-        // cable
-        ctx.strokeStyle = '#333'; ctx.lineWidth=2;
-        ctx.beginPath(); ctx.moveTo(b.x, b.y); ctx.lineTo(b.x+b.span, b.y-6); ctx.stroke();
-        // flags
-        for (let i=0;i<8;i++){
-          const bx = b.x + 10 + i*(b.span/8);
-          const by = b.y - 3 + (i%2?4:0);
-          ctx.fillStyle = b.colors[i];
-          ctx.beginPath();
-          ctx.moveTo(bx, by);
-          ctx.lineTo(bx+16, by);
-          ctx.lineTo(bx+8, by+12);
-          ctx.closePath(); ctx.fill();
-        }
-      }
-    }
+// ---- Reset / init ----
+function reset(){
+  score=0; lives=3; roundN=1; timeLeft=30; timerMs=0; gameOver=false; flash=0;
+  cars.length=0; buses.length=0; bikes.length=0; peds.length=0; train=null; trainTimer=0;
+  carSpawnDelay=900; busSpawnDelay=1100; bikeSpawnDelay=800; pedSpawnDelay=950;
+  buildStoops();
+  resetToStart();
+  toast('Deliver from the Pizzeria to the glowing stoop!');
+}
 
-    function circle(x,y,r){ ctx.beginPath(); ctx.arc(x,y,r,0,Math.PI*2); ctx.fill(); }
-    function varGet(name){ return getComputedStyle(document.documentElement).getPropertyValue(name).trim() || '#fff'; }
-
-    // --- Loop ---
-    function loop(ts){
-      const dt = Math.min(40, ts - (last||ts)); last = ts;
-      update(dt); draw(); requestAnimationFrame(loop);
-    }
-
-    function reset(){
-      score=0; lives=3; deliveries=0; level=1; wave=0; gameOver=false; flash=0; scroll=0;
-      player.x=140; player.laneIdx=1; player.y=LANES[1]-20; player.invuln=0; player.aimHold=0; player.aiming=false;
-      houses.length=0; obstacles.length=0; pizzas.length=0; banners.length=0; trains.length=0;
-      spawnWave();
-      toast('Bienvenido a Pilsen — ¡Entrega esas pizzas!');
-    }
-
-    reset(); requestAnimationFrame(loop);
-  </script>
+reset();
+requestAnimationFrame(loop);
+</script>
 </body>
 </html>
