@@ -1,0 +1,173 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Pizza Peddler</title>
+  <style>
+    body {
+      display: flex;
+      justify-content: center;
+      align-items: center;
+      height: 100vh;
+      margin: 0;
+      background-color: #222;
+    }
+    canvas {
+      border: 2px solid #fff;
+      background-color: #87ceeb;
+    }
+    #score {
+      position: absolute;
+      top: 10px;
+      left: 10px;
+      color: white;
+      font-family: Arial, sans-serif;
+      font-size: 20px;
+    }
+  </style>
+</head>
+<body>
+  <div id="score">Score: 0 | Lives: 3</div>
+  <canvas id="gameCanvas" width="800" height="600"></canvas>
+
+  <script>
+    const canvas = document.getElementById('gameCanvas');
+    const ctx = canvas.getContext('2d');
+    const scoreDisplay = document.getElementById('score');
+
+    let score = 0;
+    let lives = 3;
+    let gameOver = false;
+
+    const player = {
+      x: 100,
+      y: canvas.height - 100,
+      width: 40,
+      height: 40,
+      speed: 5,
+      lane: 1
+    };
+
+    const pizzas = [];
+    const pizzaSpeed = 7;
+
+    const houses = [
+      { x: 700, y: 100, width: 60, height: 60, delivered: false },
+      { x: 700, y: 300, width: 60, height: 60, delivered: false },
+      { x: 700, y: 500, width: 60, height: 60, delivered: false }
+    ];
+
+    const obstacles = [
+      { x: 800, y: 150, width: 50, height: 30, speed: 3 },
+      { x: 1000, y: 350, width: 50, height: 30, speed: 4 }
+    ];
+
+    const keys = {};
+    document.addEventListener('keydown', (e) => { keys[e.code] = true; });
+    document.addEventListener('keyup', (e) => { keys[e.code] = false; });
+
+    function throwPizza() {
+      pizzas.push({
+        x: player.x + player.width,
+        y: player.y,
+        width: 20,
+        height: 20,
+        direction: keys['ArrowLeft'] ? -1 : 1
+      });
+    }
+
+    function update() {
+      if (gameOver) return;
+
+      if (keys['ArrowUp'] && player.lane > 0) player.lane--;
+      if (keys['ArrowDown'] && player.lane < 2) player.lane++;
+      player.y = 100 + player.lane * 200;
+
+      if (keys['ArrowLeft']) player.x = Math.max(0, player.x - player.speed);
+      if (keys['ArrowRight']) player.x = Math.min(canvas.width - player.width, player.x + player.speed);
+
+      if (keys['Space']) throwPizza();
+
+      pizzas.forEach((pizza, index) => {
+        pizza.x += pizza.direction * pizzaSpeed;
+        if (pizza.x < 0 || pizza.x > canvas.width) {
+          pizzas.splice(index, 1);
+          return;
+        }
+
+        houses.forEach(house => {
+          if (!house.delivered &&
+              pizza.x + pizza.width > house.x &&
+              pizza.x < house.x + house.width &&
+              pizza.y > house.y &&
+              pizza.y < house.y + house.height) {
+            house.delivered = true;
+            score += 100;
+            pizzas.splice(index, 1);
+          }
+        });
+      });
+
+      obstacles.forEach(obstacle => {
+        obstacle.x -= obstacle.speed;
+        if (obstacle.x + obstacle.width < 0) {
+          obstacle.x = canvas.width + Math.random() * 200;
+          obstacle.y = [150, 350, 550][Math.floor(Math.random() * 3)];
+        }
+
+        if (player.x < obstacle.x + obstacle.width &&
+            player.x + player.width > obstacle.x &&
+            player.y < obstacle.y + obstacle.height &&
+            player.y + player.height > obstacle.y) {
+          lives--;
+          obstacle.x = canvas.width + 200;
+          if (lives <= 0) gameOver = true;
+        }
+      });
+
+      scoreDisplay.textContent = `Score: ${score} | Lives: ${lives}`;
+    }
+
+    function draw() {
+      ctx.clearRect(0, 0, canvas.width, canvas.height);
+
+      ctx.fillStyle = '#555';
+      ctx.fillRect(0, 50, canvas.width, canvas.height - 100);
+
+      ctx.fillStyle = 'red';
+      ctx.fillRect(player.x, player.y, player.width, player.height);
+
+      ctx.fillStyle = 'brown';
+      pizzas.forEach(pizza => {
+        ctx.fillRect(pizza.x, pizza.y, pizza.width, pizza.height);
+      });
+
+      houses.forEach(house => {
+        ctx.fillStyle = house.delivered ? 'green' : 'blue';
+        ctx.fillRect(house.x, house.y, house.width, house.height);
+      });
+
+      ctx.fillStyle = 'black';
+      obstacles.forEach(obstacle => {
+        ctx.fillRect(obstacle.x, obstacle.y, obstacle.width, obstacle.height);
+      });
+
+      if (gameOver) {
+        ctx.fillStyle = 'white';
+        ctx.font = '40px Arial';
+        ctx.fillText('Game Over!', canvas.width / 2 - 100, canvas.height / 2);
+        ctx.fillText(`Final Score: ${score}`, canvas.width / 2 - 100, canvas.height / 2 + 50);
+      }
+    }
+
+    function gameLoop() {
+      update();
+      draw();
+      requestAnimationFrame(gameLoop);
+    }
+
+    gameLoop();
+  </script>
+</body>
+</html>
